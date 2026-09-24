@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF Export Test</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 20px; max-width: 800px; margin: 0 auto; }
+        .btn { padding: 12px 24px; font-size: 16px; cursor: pointer; margin: 10px 0; }
+        .btn-primary { background: #007AFF; color: white; border: none; border-radius: 8px; }
+        .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+        .log { background: #f5f5f5; padding: 15px; border-radius: 8px; font-family: monospace; font-size: 13px; white-space: pre-wrap; max-height: 300px; overflow: auto; }
+    </style>
+</head>
+<body>
+    <h1>PDF Export Popup Blocker Test</h1>
+    <p>This test simulates the frontend's PDF export flow to demonstrate the popup blocker issue.</p>
+    
+    <button class="btn btn-primary" id="btnCurrent" onclick="testCurrentApproach()">Current Approach (window.open + await + navigate)</button>
+    <button class="btn btn-primary" id="btnFixed" onclick="testFixedApproach()">Fixed Approach (direct navigation)</button>
+    <button class="btn btn-primary" id="btnDirect" onclick="testDirectWindowOpen()">Direct window.open with URL</button>
+    
+    <div class="log" id="log"></div>
+
+    <script>
+        const API_BASE = 'http://localhost:8000';
+        const logEl = document.getElementById('log');
+        
+        function log(msg) {
+            const time = new Date().toLocaleTimeString();
+            logEl.textContent += `[${time}] ${msg}\n`;
+            logEl.scrollTop = logEl.scrollHeight;
+        }
+
+        async function generateAndSaveTrip() {
+            log('Generating trip...');
+            const payload = {
+                destination: '大理',
+                start_date: '2026-04-10',
+                end_date: '2026-04-12',
+                travelers: 2,
+                budget: 3200,
+                preferences: ['自然风景', '拍照', '美食'],
+                pace: '轻松',
+                dietary_preferences: ['少辣'],
+                hotel_level: '舒适型',
+                special_notes: '测试行程'
+            };
+            
+            const genResp = await fetch(`${API_BASE}/trip/generate`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            
+            if (!genResp.ok) throw new Error('Generate failed: ' + await genResp.text());
+            const trip = await genResp.json();
+            log('Generated trip: ' + trip.trip_id);
+            
+            const saveResp = await fetch(`${API_BASE}/trip/save`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    trip_id: trip.trip_id,
+                    itinerary: trip,
+                    user_id: 'test_user'
+                })
+            });
+            
+            if (!saveResp.ok) throw new Error('Save failed: ' + await saveResp.text());
+            log('Trip saved successfully');
+            return trip.trip_id;
+        }
+
+        async function testCurrentApproach() {
+            log('=== Testing CURRENT APPROACH (problematic) ===');
+            const btn = document.getElementById('btnCurrent');
+            btn.disabled = true;
+            
+            try {
+                const tripId = await generateAndSaveTrip();
+                log('Opening popup with about:blank...');
+                
+                // This is the CURRENT problematic code from Result.vue
+                const w = window.open('about:blank', '_blank');
+                
+                if (!w) {
+                    log('❌ POPUP BLOCKED: window.open returned null');
+                    return;
+                }
+                
+                log('Popup opened, waiting for saveTrip (simulated)...');
+                // Simulate the await saveTrip delay
+                await new Promise(r => setTimeout(r, 1000));
+                
+                log('Navigating popup to PDF URL...');
+                const pdfUrl = `${API_BASE}/export/${encodeURIComponent(tripId)}/pdf`;
+                w.location.href = pdfUrl;
+                log('Navigation triggered');
+            } catch (e) {
+                log('Error: ' + e.message);
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        async function testFixedApproach() {
+            log('=== Testing FIXED APPROACH (direct navigation in same tab) ===');
+            const btn = document.getElementById('btnFixed');
+            btn.disabled = true;
+            
+            try {
+                const tripId = await generateAndSaveTrip();
+                log('Navigating current window to PDF URL...');
+                
+                // Fixed approach: navigate current window directly
+                const pdfUrl = `${API_BASE}/export/${encodeURIComponent(tripId)}/pdf`;
+                window.location.href = pdfUrl;
+                log('Navigation triggered (this will leave the page)');
+            } catch (e) {
+                log('Error: ' + e.message);
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        async function testDirectWindowOpen() {
+            log('=== Testing DIRECT window.open WITH URL (better but still risky) ===');
+            const btn = document.getElementById('btnDirect');
+            btn.disabled = true;
+            
+            try {
+                const tripId = await generateAndSaveTrip();
+                log('Opening popup directly with PDF URL...');
+                
+                // Better approach: open directly with the URL
+                const pdfUrl = `${API_BASE}/export/${encodeURIComponent(tripId)}/pdf`;
+                const w = window.open(pdfUrl, '_blank');
+                
+                if (!w) {
+                    log('❌ POPUP BLOCKED: window.open returned null');
+                    log('💡 Solution: Use a direct link or button with target="_blank"');
+                    return;
+                }
+                
+                log('Popup opened with PDF URL directly');
+            } catch (e) {
+                log('Error: ' + e.message);
+            } finally {
+                btn.disabled = false;
+            }
+        }
+    </script>
+</body>
+</html>
