@@ -701,7 +701,28 @@ def generate_trip_itinerary(request: TripRequest) -> Itinerary:
     fallback_meal_names = fallback_candidates["meals"]
     fallback_hotel_names = fallback_candidates["hotels"]
     
-    # 根据每日预算选择最合适的酒店
+    # 预估门票总费用来分配预算（在主循环后会用更精确的 per-day 计算，但此处需要提前估算）
+    _pre_ticket_costs = []
+    for _idx in range(day_count):
+        _spot_name = fallback_spot_names[_idx] if _idx < len(fallback_spot_names) else ""
+        _spot_desc = ""
+        if llm_draft is not None:
+            _llm_day = next((d for d in llm_draft.days if d.day_index == _idx + 1), None)
+            if _llm_day is not None:
+                _spot_name = getattr(_llm_day, "spot_name", "") or _spot_name
+                _spot_desc = getattr(_llm_day, "spot_description", "") or ""
+        _pre_ticket_costs.append(_estimate_ticket_cost(_spot_name, _spot_desc) if _spot_name else 0.0)
+    
+    _ticket_total = round(sum(_pre_ticket_costs), 2)
+    _target_total = request.budget * (
+        0.78 if request.pace == "轻松" else 0.92 if request.pace == "紧凑" else 0.85
+    )
+    _other_budget = round(request.budget * (0.05 + min(day_count, 4) * 0.01), 2)
+    allocatable_budget = max(
+        _target_total - _ticket_total - _other_budget,
+        request.budget * 0.45,
+    )
+
     # 先计算每日酒店预算
     hotel_level = request.hotel_level or "舒适型"
     if "豪华" in hotel_level:
@@ -791,7 +812,8 @@ def generate_trip_itinerary(request: TripRequest) -> Itinerary:
             unavailable_notes.append("未从当前攻略检索到景点信息，今天未安排景点。")
         if not meal_name:
             unavailable_notes.append("未从当前攻略检索到餐饮信息，今天未安排餐饮。")
-        if fallback_hotel_name is None:
+        _selected_hotel = selected_hotels_per_day[index] if index < len(selected_hotels_per_day) else None
+        if _selected_hotel is None:
             unavailable_notes.append("未从当前攻略检索到住宿信息，未安排住宿。")
 
         # 计算当天总门票费用（所有景点之和）

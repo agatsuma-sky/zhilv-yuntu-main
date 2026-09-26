@@ -22,14 +22,32 @@ if (-not (Test-Path -LiteralPath (Join-Path $frontendPath "package.json") -PathT
     throw "Frontend package not found at $frontendPath."
 }
 
+# 确保 Node.js 在 PATH 中（适配 winget/choco 安装或手动添加的 Node.js）
+$nodeJsDirs = @()
+$cmd = Get-Command node -ErrorAction SilentlyContinue
+if ($null -ne $cmd) {
+    $nodeJsDirs += Split-Path -Parent $cmd.Source
+}
 $npmCommand = Get-Command npm.cmd -ErrorAction SilentlyContinue
 if ($null -ne $npmCommand) {
     $npmPath = $npmCommand.Source
 } else {
     $npmPath = Join-Path $env:ProgramFiles "nodejs\npm.cmd"
+    $nodeJsDirs += Join-Path $env:ProgramFiles "nodejs"
 }
 if (-not (Test-Path -LiteralPath $npmPath -PathType Leaf)) {
     throw "npm.cmd not found. Install Node.js or add it to PATH."
+}
+# 将 Node.js 目录添加到当前进程的 PATH，确保子进程能找到 node/vite 等可执行文件
+$nodeJsDir = ($nodeJsDirs | Where-Object { Test-Path $_ -PathType Container } | Select-Object -First 1)
+if ($nodeJsDir -and -not ($env:PATH -split ';' | Where-Object { $_ -eq $nodeJsDir })) {
+    $env:PATH = "$nodeJsDir;$env:PATH"
+}
+
+# 确保前端依赖已安装
+if (-not (Test-Path -LiteralPath (Join-Path $frontendPath "node_modules") -PathType Container)) {
+    Write-Host "前端依赖未安装，正在安装..." -ForegroundColor Yellow
+    & $npmPath --prefix $frontendPath ci --no-audit --no-fund
 }
 
 $pathBytes = [System.Text.Encoding]::UTF8.GetBytes($worktree)

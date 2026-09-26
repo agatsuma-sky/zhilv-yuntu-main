@@ -6,42 +6,7 @@
 
 相比只输出一段文本的 LLM Demo，这个项目更强调完整链路落地：从 **行程生成、攻略检索、地图信息补全、天气补充，到历史管理与文档导出**，尽量把 AI 能力组织成一个可交互、可保存、可展示的产品原型。
 
-## 📝 最近更新
-
-<details>
-<summary><strong>查看版本更新记录（最新：2026-07-26）</strong></summary>
-
-- `2026-07-26`
-  - 动态城市：新增 A/B/C 覆盖分级。6 个已沉淀城市继续走本地 RAG；其他可识别城市在候选充足时，通过高德景点、餐饮和住宿 POI 候选直接生成动态方案。用户已手工验证多个城市可以生成。
-  - 真实性约束：动态 Planner 只输出候选 POI ID，服务层校验后回填真实名称、地址、坐标和图片；模型不可用或返回越界 ID 时，也只从本次真实候选池降级。
-  - 输入边界：当前支持单城市规划。青海等普通省级目的地会提示改用具体城市；上海、北京、天津和重庆等直辖市仍按城市处理。
-  - 边界加固：区县级目的地改用行政区 `adcode` 精确过滤候选；明确取消景点时保留空景点列表，避免“自由活动”被地图重新绑定；地图故障会返回脱敏的失败阶段与原因。该组改动待本地回归验收。
-- `2026-07-18`
-  - RAG：知识库扩展为北京、大理、成都、西安、厦门、三亚 6 个目的地；Chunk 写入 `destination` metadata，Chroma 向量检索、关键词 fallback、Rerank 与缓存均按目的地隔离，跨城市污染评估自动纳入北京。
-  - 数据质量：检索扩展词迁移到 `backend/data/retrieval_rules.json`；RAG 评估集更新为 18 条并与当前攻略内容对齐；新增离线一致性校验，能够发现失效规则词、fallback 候选和评估断言词。
-  - 失败降级：模型不可用或候选不足时，行程只展示从当前 RAG 上下文提取的景点、餐饮和住宿名称；没有真实候选就明确留空，不再生成“推荐景点 N”类模板实体。
-  - 开发体验：新增 `start.ps1`，构建并启动后会打印前端、后端和 API 文档地址；新增模型连通性检测脚本，Chat 与 Embedding 可分别诊断。
-- `2026-06-11`
-  - 部署：新增 Docker Compose 容器化部署方案，后端（FastAPI）、前端（Nginx）、Redis 三容器编排，`docker compose up` 一键启动。
-  - 前端：Nginx 反向代理统一前后端入口，两阶段构建优化镜像体积。
-- `2026-05-19`
-  - 工程观测：新增 token 消耗统计，覆盖 Query Rewrite、Query Embedding、qwen3-rerank 与 Planner 生成链路，并在后端终端输出分项与总量。
-  - 接口能力：`/trip/generate` 返回 `token_usage` 字段，`/trip/stats` 支持汇总已保存行程的 token 消耗。
-- `2026-05-07`
-  - RAG：完成 Cross-encoder Rerank（qwen3-rerank）+ 噪声预过滤，Top1 命中率 86.7%→93.3%，MRR 0.922→0.967。
-  - RAG：新增 Rerank 缓存，缓存命中后 Avg Latency 从 728ms 降至 425ms，降幅 41.6%。
-- `2026-05-06`
-  - RAG：完善评估指标体系，新增 MRR、Noise Rate、Latency、Cross-destination Pollution 四个量化指标。
-  - RAG：完成 LLM-based Query Rewrite，用 qwen-max 替代手写规则改写检索 query，Top1 命中率 80%→86.7%，MRR 0.889→0.922。
-- `2026-04-29`
-  - RAG：扩充知识库至 5 个目的地（大理/成都/西安/厦门/三亚），评估样例集扩充至 15 条，完成规则级 Rerank 多层降权与 Query Rewrite 目的地过滤，消除跨目的地污染。
-  - 地图前端：新增地图路线虚线箭头可视化、🚩 旗帜打卡标记与景点图片气泡窗口。
-- `2026-04-25`：完成第一轮 RAG 在线阶段优化，已接入轻量化 Query Rewrite、轻量 Rerank 与检索调试脚本。
-- `2026-04-15`：新增 Redis 缓存层，已覆盖天气查询、地图查询与 RAG 检索结果缓存。
-
-</details>
-
-更多更新见：[CHANGELOG.md](./CHANGELOG.md)
+更新见：[CHANGELOG.md](./CHANGELOG.md)
 
 > **数据边界**：6 个本地 Markdown 攻略用于 RAG 参考；动态城市的地点实体来自当次高德 POI 候选。两条路径都不代表门票、酒店价格、营业状态或可预订性已经实时核验，相关金额目前属于规划估算。
 
@@ -468,12 +433,21 @@ TripPlannerDemo/
 
 需要本机已安装 Python 3.11、Node.js 与 npm。后端和前端请分别在两个终端中启动。
 
+也可以使用自动化脚本一键完成初始化与启动：
+
+```powershell
+.kilo\setup-script.ps1   # 自动创建虚拟环境、安装 Python / Node 依赖、拷贝 .env
+.kilo\run-script.ps1      # 自动启动后端（uvicorn）和前端（vite）开发服务器
+```
+
+脚本会自动探测 `node` 和 `npm` 路径并添加到 PATH，若 `node_modules` 不存在会自动安装依赖。
+
 #### 1. 配置并启动后端
 
 ```powershell
 cd backend
 Copy-Item .env.example .env
-# 编辑 .env，填写 LLM、Embedding 和高德地图等配置
+# 编辑 .env，填写 LLM、Embedding、Rerank 和高德地图等配置
 pip install -r requirements.txt
 uvicorn app.api.main:app --host 0.0.0.0 --port 8000
 ```
@@ -593,36 +567,41 @@ Docker Compose 将后端、前端和 Redis 打包为三个容器，统一编排�
 
 ```env
 # LLM
-LLM_PROVIDER=openai_compatible          # 固定值，使用 OpenAI 兼容接口
-LLM_API_KEY=your_api_key                # OpenAI-compatible 服务的 API Key
-LLM_MODEL=your_chat_model               # 生成模型，例如 deepseek-v4-flash
-LLM_BASE_URL=https://your-provider/v1   # 服务的 OpenAI-compatible 地址
-LLM_TIMEOUT_SECONDS=60                  # 单次 LLM 调用超时
-LLM_MAX_RETRIES=1                       # 失败重试次数
+LLM_PROVIDER=openai_compatible            # 固定值，使用 OpenAI 兼容接口
+LLM_API_KEY=your_api_key                  # 阿里百炼 API Key
+LLM_MODEL=qwen3.7-plus                    # 生成模型
+LLM_BASE_URL=https://your-workspace.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+LLM_TIMEOUT_SECONDS=60                    # 单次 LLM 调用超时
+LLM_MAX_RETRIES=1                         # 失败重试次数
 
 # RAG / 向量库
-CHROMA_DB_DIR=db/chroma_db              # ChromaDB 持久化目录
-CHROMA_COLLECTION_NAME=travel_guides    # 集合名称
-EMBEDDING_MODEL=your_embedding_model    # 嵌入模型，例如 qwen3.7-text-embedding
-EMBEDDING_BATCH_SIZE=10                 # 单批嵌入条数
-RERANK_MODEL=qwen3-rerank              # DashScope Rerank 模型
+CHROMA_DB_DIR=db/chroma_db                # ChromaDB 持久化目录
+CHROMA_COLLECTION_NAME=travel_guides      # 集合名称
+EMBEDDING_API_KEY=your_embedding_api_key  # Embedding API Key（留空回退到 LLM_API_KEY）
+EMBEDDING_MODEL=qwen3.7-text-embedding     # 嵌入模型
+EMBEDDING_BASE_URL=https://your-workspace.cn-beijing.maas.aliyuncs.com/api/v1/services/embeddings/text-embedding/text-embedding
+EMBEDDING_BATCH_SIZE=10                   # 单批嵌入条数
+RERANK_MODEL=qwen3.7-text-rerank          # Rerank 模型
+RERANK_BASE_URL=https://your-workspace.cn-beijing.maas.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank
+RERANK_API_KEY=your_rerank_api_key        # Rerank API Key（留空回退到 EMBEDDING_API_KEY）
 
 # Redis / 缓存
-REDIS_ENABLED=false                     # 是否开启缓存（需先启动 Redis）
-REDIS_URL=redis://127.0.0.1:6379/0     # Redis 连接地址
-REDIS_KEY_PREFIX=trip_planner           # 缓存 key 前缀，避免多项目冲突
-REDIS_DEFAULT_TTL_SECONDS=1800          # 默认缓存 30 分钟
-REDIS_WEATHER_TTL_SECONDS=1800          # 天气缓存 30 分钟
-REDIS_MAP_TTL_SECONDS=86400             # 地图缓存 24 小时
-REDIS_RAG_TTL_SECONDS=21600             # RAG 检索缓存 6 小时
-REDIS_RERANK_TTL_SECONDS=21600          # Rerank 缓存 6 小时
+REDIS_ENABLED=false                       # 是否开启缓存（需先启动 Redis）
+REDIS_URL=redis://127.0.0.1:6379/0        # Redis 连接地址
+REDIS_KEY_PREFIX=trip_planner             # 缓存 key 前缀，避免多项目冲突
+REDIS_DEFAULT_TTL_SECONDS=1800            # 默认缓存 30 分钟
+REDIS_WEATHER_TTL_SECONDS=1800            # 天气缓存 30 分钟
+REDIS_MAP_TTL_SECONDS=86400              # 地图缓存 24 小时
+REDIS_RAG_TTL_SECONDS=21600              # RAG 检索缓存 6 小时
+REDIS_RERANK_TTL_SECONDS=21600           # Rerank 缓存 6 小时
 
 # 高德地图
-AMAP_API_KEY=your_amap_web_service_key  # 高德 Web 服务 Key
+AMAP_WEB_SERVICE_KEY=your_amap_web_service_key  # 后端 Web 服务 Key，不能与前端 JS API Key 混用
+AMAP_API_KEY=your_amap_web_service_key
 AMAP_BASE_URL=https://restapi.amap.com/v3
-AMAP_DEFAULT_CITY=                      # 默认城市（可留空）
-AMAP_TIMEOUT_SECONDS=20                 # 高德接口超时
-ENABLE_AMAP_ENRICHMENT=true             # 是否开启地图信息补全
+AMAP_DEFAULT_CITY=                          # 默认城市（可留空）
+AMAP_TIMEOUT_SECONDS=20                     # 高德接口超时
+ENABLE_AMAP_ENRICHMENT=true                 # 是否开启地图信息补全
 ```
 
 ### 前端 `frontend/.env`

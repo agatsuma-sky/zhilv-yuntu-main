@@ -22,6 +22,7 @@ htmlcov/
 venv/
 env/
 .python-version
+travel/  # 项目本地 Python 虚拟环境
 
 # Backend runtime data
 backend/db/

@@ -32,20 +32,24 @@ function Copy-Nested-Environment {
 function Get-NpmPath {
     $command = Get-Command npm.cmd -ErrorAction SilentlyContinue
     if ($null -ne $command) {
-        return $command.Source
+        $nodeDir = Split-Path -Parent $command.Source
+    } else {
+        $nodeDir = Join-Path $env:ProgramFiles "nodejs"
+        if (-not (Test-Path -LiteralPath $nodeDir)) {
+            $nodeDir = Join-Path ${env:ProgramW6432} "nodejs"
+        }
+        if ([string]::IsNullOrWhiteSpace($nodeDir)) {
+            throw "Node.js installation directory not found."
+        }
     }
 
-    $nodeRoot = $env:ProgramFiles
-    if ([string]::IsNullOrWhiteSpace($nodeRoot)) {
-        $nodeRoot = ${env:ProgramW6432}
-    }
-    if ([string]::IsNullOrWhiteSpace($nodeRoot)) {
-        throw "Node.js installation directory not found."
-    }
-
-    $npmPath = Join-Path $nodeRoot "nodejs\npm.cmd"
+    $npmPath = Join-Path $nodeDir "npm.cmd"
     if (-not (Test-Path -LiteralPath $npmPath -PathType Leaf)) {
         throw "npm.cmd not found. Install Node.js or add it to PATH."
+    }
+    # 将 Node.js 目录添加到 PATH，确保子进程（如 vite）能找到 node.exe
+    if ($nodeDir -and -not ($env:PATH -split ';' | Where-Object { $_ -eq $nodeDir })) {
+        $env:PATH = "$nodeDir;$env:PATH"
     }
     return $npmPath
 }

@@ -19,6 +19,88 @@ from app.rag.guide_catalog import destination_for_guide
 
 DATA_DIR = BACKEND_DIR / "data"
 
+_IS_MAAS_API = "maas.aliyuncs.com" in (EMBEDDING_BASE_URL or "").lower()
+
+
+def _is_maas_api() -> bool:
+    """是否使用阿里云 MaaS 格式的 embedding API。"""
+    return _IS_MAAS_API
+
+
+def _maas_embed_endpoint() -> str:
+    """构建 MaaS embedding 的完整 URL。"""
+    base_url = (EMBEDDING_BASE_URL or "").rstrip("/")
+    if "/embeddings/text-embedding/text-embedding" in base_url:
+        return base_url
+    return f"{base_url}/embeddings/text-embedding/text-embedding"
+
+
+def _maas_embed_batch(texts: list[str]) -> tuple[list[list[float]] | None, dict[str, int]]:
+    """调用 MaaS embedding API 批量生成向量，返回 (vectors, token_usage)。"""
+    empty_usage = {"prompt_tokens": 0, "completion_tokens": 0}
+    if not EMBEDDING_API_KEY or not EMBEDDING_BASE_URL:
+        return None, empty_usage
+
+    endpoint = _maas_embed_endpoint()
+    payload = {
+        "model": EMBEDDING_MODEL,
+        "input": {"texts": texts},
+    }
+    headers = {
+        "Authorization": f"Bearer {EMBEDDING_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    try:
+        with httpx.Client(timeout=60) as client:
+            response = client.post(endpoint, json=payload, headers=headers)
+        if response.status_code == 200:
+            data = response.json()
+            embeddings_list = data.get("output", {}).get("embeddings", [])
+            vectors = [item["embedding"] for item in embeddings_list]
+            usage = _extract_embedding_token_usage(data)
+            return vectors, usage
+        else:
+            print(
+                f"[embedding] MaaS embeddings API failed: "
+                f"status_code={response.status_code}, response={response.text[:500]}"
+            )
+            return None, empty_usage
+    except Exception as exc:
+        print(f"[embedding] MaaS embeddings API failed: {type(exc).__name__}: {exc}")
+        return None, empty_usage
+
+
+def embed_documents_with_usage(
+    documents: list[str], batch_size: int | None = None
+) -> tuple[list[list[float]] | None, dict[str, int]]:
+    """批量生成文档向量，自动适配 MaaS 或 OpenAI 兼容 API。"""
+    empty_usage = {"prompt_tokens": 0, "completion_tokens": 0}
+    if not EMBEDDING_API_KEY:
+        return None, empty_usage
+
+    if batch_size is None:
+        batch_size = EMBEDDING_BATCH_SIZE
+
+    if _is_maas_api():
+        total_prompt = 0
+        all_vectors: list[list[float]] = []
+        for i in range(0, len(documents), batch_size):
+            batch = documents[i : i + batch_size]
+            vectors, usage = _maas_embed_batch(batch)
+            if vectors is None:
+                print("[embedding] MaaS batch embedding failed, aborting.")
+                return None, empty_usage
+            all_vectors.extend(vectors)
+            total_prompt += usage["prompt_tokens"]
+        return all_vectors, {"prompt_tokens": total_prompt, "completion_tokens": 0}
+
+    embeddings = _build_embeddings()
+    if embeddings is None:
+        return None, empty_usage
+    print("[embedding] using LangChain OpenAIEmbeddings for batch embed_documents")
+    return embeddings.embed_documents(documents), empty_usage
+
 
 def _split_markdown_into_chunks(markdown_text: str, source_name: str) -> list[dict[str, str]]:
     """按二级、三级标题切分 Markdown，返回可检索片段。"""
@@ -169,6 +251,23 @@ def _embed_query_with_usage(query: str) -> tuple[list[float] | None, dict[str, i
     if not EMBEDDING_API_KEY:
         return None, empty_usage
 
+    if _is_maas_api():
+        vectors, usage = _maas_embed_batch([query])
+        if vectors:
+            print(
+                "[embedding] query embedding token: "
+                f"prompt={usage['prompt_tokens']}, completion=0, source=api(maas)"
+            )
+            return vectors[0], usage
+        print("[embedding] MaaS query embedding failed, falling back to OpenAI-compatible")
+        return _embed_query_openai_compatible(query)
+
+    return _embed_query_openai_compatible(query)
+
+
+def _embed_query_openai_compatible(query: str) -> tuple[list[float] | None, dict[str, int]]:
+    """OpenAI / DashScope 兼容模式 embedding。"""
+    empty_usage = {"prompt_tokens": 0, "completion_tokens": 0}
     base_url = (EMBEDDING_BASE_URL or "https://api.openai.com/v1").rstrip("/")
     endpoint = f"{base_url}/embeddings"
     payload = {
@@ -234,17 +333,17 @@ def ingest_guide_chunks_to_chroma() -> int:
     4. 生成向量
     5. 把向量、文本和 metadata 一起写入 Chroma
     """
-    embeddings = _build_embeddings()
     collection = _get_chroma_collection()
     chunks = load_guide_chunks()
 
-    if embeddings is None:
-        raise RuntimeError("当前环境缺少 embedding 能力，无法写入 Chroma。")
     if collection is None:
         raise RuntimeError("当前环境缺少 chromadb，无法写入 Chroma。")
 
     documents = [_build_document_text(chunk) for chunk in chunks]
-    vectors = embeddings.embed_documents(documents)
+    vectors, _ = embed_documents_with_usage(documents)
+    if vectors is None:
+        raise RuntimeError("当前环境缺少 embedding 能力，无法写入 Chroma。")
+
     ids = [chunk["id"] for chunk in chunks]
     metadatas = [
         {

@@ -16,11 +16,14 @@ from app.rag.vector_db import search_guide_chunks_with_usage
 from app.services.cache_service import get_cached_json, set_cached_json
 
 
-DASHSCOPE_RERANK_URL = (
-    f"{RERANK_BASE_URL}/reranks"
-    if RERANK_BASE_URL
-    else "https://dashscope.aliyuncs.com/compatible-api/v1/reranks"
-)
+_IS_MAAS_RERANK = "maas.aliyuncs.com" in (RERANK_BASE_URL or "").lower()
+
+
+def _is_maas_rerank_url() -> bool:
+    return _IS_MAAS_RERANK
+
+
+RERANK_ENDPOINT = RERANK_BASE_URL or "https://dashscope.aliyuncs.com/compatible-api/v1/reranks"
 
 
 logger = logging.getLogger(__name__)
@@ -141,12 +144,12 @@ def _extract_rerank_token_usage(response_data: dict) -> tuple[dict[str, int], bo
     }, False
 
 
-def _rerank_with_dashscope(
+def _rerank_with_api(
     query: str,
     chunks: list[dict[str, str]],
     top_k: int,
 ) -> tuple[list[tuple[float, int]] | None, dict[str, int]]:
-    """调用 DashScope qwen3-rerank 模型做语义重排序。返回 (scored, token_usage)。"""
+    """调用 rerank 模型做语义重排序（支持 MaaS 和 DashScope/OpenAI 兼容模式）。返回 (scored, token_usage)。"""
     empty_usage = {"prompt_tokens": 0, "completion_tokens": 0}
     if not RERANK_API_KEY or not chunks:
         print("[rerank] skip qwen3-rerank: missing RERANK_API_KEY or empty chunks")
@@ -174,13 +177,26 @@ def _rerank_with_dashscope(
         "优先选择包含具体景点名称、活动推荐、实用信息的片段，"
         "避免选择泛化的目的地简介、文档开头等信息量低的片段。"
     )
-    payload = {
-        "model": RERANK_MODEL,
-        "documents": documents,
-        "query": query,
-        "top_n": min(top_k, len(documents)),
-        "instruct": instruct,
-    }
+    if _is_maas_rerank_url():
+        payload = {
+            "model": RERANK_MODEL,
+            "input": {
+                "query": query,
+                "documents": documents,
+            },
+            "parameters": {
+                "top_n": min(top_k, len(documents)),
+                "instructions": instruct,
+            },
+        }
+    else:
+        payload = {
+            "model": RERANK_MODEL,
+            "documents": documents,
+            "query": query,
+            "top_n": min(top_k, len(documents)),
+            "instruct": instruct,
+        }
 
     try:
         print(
@@ -189,7 +205,7 @@ def _rerank_with_dashscope(
         )
         with httpx.Client(timeout=30) as client:
             response = client.post(
-                DASHSCOPE_RERANK_URL,
+                RERANK_ENDPOINT,
                 json=payload,
                 headers={
                     "Authorization": f"Bearer {RERANK_API_KEY}",
@@ -200,7 +216,7 @@ def _rerank_with_dashscope(
             if response.status_code != 200:
                 print(f"[rerank] qwen3-rerank response preview={response.text[:500]}")
                 logger.warning(
-                    "dashscope rerank HTTP %d: %s",
+                    "rerank HTTP %d: %s",
                     response.status_code,
                     response.text[:500],
                 )
@@ -223,7 +239,7 @@ def _rerank_with_dashscope(
             )
         if token_usage["prompt_tokens"] or token_usage["completion_tokens"]:
             logger.info(
-                "dashscope rerank token: prompt=%d, completion=%d",
+                "rerank token: prompt=%d, completion=%d",
                 token_usage["prompt_tokens"],
                 token_usage["completion_tokens"],
             )
@@ -235,7 +251,7 @@ def _rerank_with_dashscope(
                 "[rerank] qwen3-rerank empty results, "
                 f"response preview={json.dumps(data, ensure_ascii=False)[:500]}"
             )
-            logger.warning("dashscope rerank empty results, response: %s", json.dumps(data, ensure_ascii=False)[:500])
+            logger.warning("rerank empty results, response: %s", json.dumps(data, ensure_ascii=False)[:500])
             return None, token_usage
 
         scored = [
@@ -245,12 +261,12 @@ def _rerank_with_dashscope(
         ]
         scored.sort(key=lambda x: x[0], reverse=True)
         print(f"[rerank] qwen3-rerank success: results={len(scored)}")
-        logger.info("dashscope rerank: query=%s, results=%d", query, len(scored))
+        logger.info("rerank: query=%s, results=%d", query, len(scored))
         return scored, token_usage
 
     except Exception as exc:
         print(f"[rerank] qwen3-rerank failed: {type(exc).__name__}: {exc}")
-        logger.warning("dashscope rerank failed: %s, falling back to rule-based", exc)
+        logger.warning("rerank failed: %s, falling back to rule-based", exc)
         return None, empty_usage
 
 
@@ -300,19 +316,19 @@ def rerank_guide_chunks(
         return reranked[:top_k], empty_usage
     logger.info("rerank cache miss: query=%s", query)
 
-    # 优先尝试 DashScope Cross-encoder Rerank
-    dashscope_results, rerank_token_usage = _rerank_with_dashscope(query, matched_chunks, top_k)
-    if dashscope_results:
+    # 优先尝试 Cross-encoder Rerank
+    rerank_results, rerank_token_usage = _rerank_with_api(query, matched_chunks, top_k)
+    if rerank_results:
         print("[rerank] using qwen3-rerank results")
         # 写入缓存：只存索引和分数，不重复存文本
         cache_value = [
             {"i": idx, "s": round(score, 4)}
-            for score, idx in dashscope_results
+            for score, idx in rerank_results
         ]
         set_cached_json(cache_key, cache_value, expire_seconds=REDIS_RERANK_TTL_SECONDS)
 
         reranked = []
-        for score, original_index in dashscope_results:
+        for score, original_index in rerank_results:
             if 0 <= original_index < len(matched_chunks):
                 enriched_chunk = dict(matched_chunks[original_index])
                 enriched_chunk["rerank_score"] = round(score, 4)

@@ -56,9 +56,15 @@ EMBEDDING_BATCH_SIZE = int(os.getenv("EMBEDDING_BATCH_SIZE", "10"))
 RERANK_MODEL = os.getenv("RERANK_MODEL", "qwen3-rerank")
 _RERANK_BASE_URL = os.getenv("RERANK_BASE_URL", "").strip()
 if not _RERANK_BASE_URL and EMBEDDING_BASE_URL:
-    _RERANK_BASE_URL = EMBEDDING_BASE_URL.replace(
-        "/compatible-mode/v1", "/compatible-api/v1"
-    )
+    if "maas.aliyuncs.com" in EMBEDDING_BASE_URL:
+        _RERANK_BASE_URL = EMBEDDING_BASE_URL.replace(
+            "/embeddings/text-embedding/text-embedding",
+            "/rerank/text-rerank/text-rerank",
+        )
+    else:
+        _RERANK_BASE_URL = EMBEDDING_BASE_URL.replace(
+            "/compatible-mode/v1", "/compatible-api/v1"
+        )
 RERANK_BASE_URL = _RERANK_BASE_URL.rstrip("/")
 RERANK_API_KEY = os.getenv("RERANK_API_KEY", "").strip() or EMBEDDING_API_KEY
 

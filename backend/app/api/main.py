@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes.export import router as export_router
@@ -46,3 +46,9 @@ def health_check() -> dict[str, str]:
 app.include_router(trip_router)
 app.include_router(export_router)
 app.include_router(weather_router)
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon() -> Response:
+    """静默处理浏览器自动请求的 favicon，避免 404 日志噪音。"""
+    return Response(status_code=204)
