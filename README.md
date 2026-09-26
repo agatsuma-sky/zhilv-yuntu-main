@@ -353,6 +353,9 @@ TripPlannerDemo/
 │   ├── tests/                           # pytest 测试
 │   ├── Dockerfile                       # 后端镜像配置
 │   ├── .env.example                     # 后端环境变量模板
+│   ├── .env.docker                      # Docker 环境专用配置
+│   ├── .dockerignore
+│   ├── entrypoint.sh                    # 容器启动前初始化 ChromaDB
 │   └── requirements.txt
 ├── frontend/
 │   ├── src/
@@ -367,6 +370,7 @@ TripPlannerDemo/
 │   │   ├── App.vue
 │   │   └── main.ts
 │   ├── Dockerfile                       # 前端镜像配置
+│   ├── .dockerignore
 │   ├── nginx.conf                       # Nginx 反向代理配置
 │   └── package.json
 ├── docs/                                # 架构、数据与优化文档
@@ -484,7 +488,15 @@ npm run dev
 
 ### 方式二：Docker Compose 运行
 
-需要先安装并启动 [Docker Desktop](https://www.docker.com/products/docker-desktop/)。推荐在 Windows PowerShell 中执行：
+需要先安装并启动 [Docker Desktop](https://www.docker.com/products/docker-desktop/)。在启动前，请先配置后端环境：
+
+```powershell
+cd backend
+copy .env.example .env.docker
+# 编辑 .env.docker，填写 MaaS API Key、Embedding、Rerank 和高德地图配置
+```
+
+然后在 Windows PowerShell 中执行：
 
 ```powershell
 .\start.ps1
@@ -496,7 +508,13 @@ npm run dev
 docker compose up --build -d
 ```
 
-启动后访问：
+前端需要 `VITE_AMAP_JS_KEY` 构建参数（高德地图 JS API Key），可以通过项目根目录的 `.env` 文件或环境变量传入：
+
+```powershell
+# 方法 1：设置环境变量
+$env:VITE_AMAP_JS_KEY="your_amap_js_key"
+docker compose up --build -d
+```
 
 ```text
 前端:     http://localhost
@@ -544,20 +562,22 @@ Docker Compose 将后端、前端和 Redis 打包为三个容器，统一编排�
 
 | 文件 | 作用 |
 |------|------|
-| `backend/Dockerfile` | 后端打包：Python 3.11 精简镜像，安装依赖后运行 uvicorn |
-| `frontend/Dockerfile` | 前端两阶段构建：Node 20 编译 Vue → Nginx alpine 托管静态文件 |
+| `backend/Dockerfile` | 后端打包：Python 3.11 精简镜像，安装依赖后通过 `entrypoint.sh` 初始化 ChromaDB，再运行 uvicorn |
+| `backend/entrypoint.sh` | 容器启动前置脚本：初始化 SQLite 表结构 + 写入 ChromaDB 知识库嵌入 |
+| `backend/.env.docker` | Docker 环境专用配置文件（与 `.env` 分离，避免泄露真实密钥） |
+| `frontend/Dockerfile` | 前端两阶段构建：Node 22 编译 Vue → Nginx alpine 托管静态文件 |
 | `frontend/nginx.conf` | Nginx 配置：静态文件托管 + API 反向代理到后端容器 |
 | `docker-compose.yaml` | 服务编排：定义 Redis、后端、前端三个容器的依赖关系和端口映射 |
 | `backend/.dockerignore` | 排除 `__pycache__`、`.env`、`db/` 等不需要打包的文件 |
-| `frontend/.dockerignore` | 排除 `node_modules`、`dist` 等不需要打包的文件 |
+| `frontend/.dockerignore` | 排除 `node_modules`、`dist`、`.env` 等不需要打包的文件 |
 
 ### 关键设计
 
-- **两阶段构建**：前端用 Node 编译出静态文件后，只把产物复制到 Nginx 镜像，最终镜像不含 Node.js，体积从几百 MB 缩小到几十 MB。
+- **两阶段构建**：前端用 Node 22 编译出静态文件后，只把产物复制到 Nginx 镜像，最终镜像不含 Node.js，体积从几百 MB 缩小到几十 MB。
 - **Nginx 反向代理**：前端静态文件由 Nginx 直接返回，API 请求通过 `proxy_pass` 转发给后端容器，统一入口，避免跨域问题。
-- **层缓存优化**：后端 Dockerfile 先复制 `requirements.txt` 安装依赖，再复制代码。改代码时不会重新安装依赖。
-- **环境变量隔离**：`.env` 文件通过 `env_file` 注入容器，不打包进镜像，避免泄露 API Key。
-- **数据持久化**：Redis 数据和 SQLite 数据库通过 Docker volumes 挂载；当前知识库 Markdown 随后端镜像构建，更新攻略后需重新构建镜像。
+- **ChromaDB 预热**：`entrypoint.sh` 在 uvicorn 启动前执行 `ingest_guide_chunks_to_chroma()`，确保 ChromaDB 向量集合已就绪。
+- **环境变量隔离**：`.env.docker` 通过 `env_file` 注入容器，不打包进镜像，避免泄露 API Key。`.dockerignore` 确保本地 `.env` 不会被复制到镜像中。
+- **数据持久化**：Redis 数据和 SQLite 数据库通过 Docker volumes 挂载；知识库 Markdown 随后端镜像构建，更新攻略后需重新构建镜像。
 
 ---
 

@@ -1,16 +1,19 @@
 # 阶段 1：构建 Vue 应用
-FROM node:20-alpine AS build
-
+FROM node:22-alpine AS build
+ 
 WORKDIR /app
-
+ 
 COPY package.json package-lock.json* ./
-RUN npm install
-
+RUN npm ci
+ 
 COPY . .
-
+ 
 # Docker 环境下 API 地址走 Nginx 代理
 ENV VITE_API_BASE_URL=/api
-
+# AMAP JS Key 通过构建参数传入
+ARG VITE_AMAP_JS_KEY
+ENV VITE_AMAP_JS_KEY=$VITE_AMAP_JS_KEY
+ 
 RUN npm run build
 
 # 阶段 2：Nginx 托管静态文件

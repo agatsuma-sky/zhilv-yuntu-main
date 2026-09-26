@@ -1,0 +1,20 @@
+# Shell scripts — always LF for Linux containers
+*.sh text eol=lf
+
+# YAML files — always LF
+*.yaml text eol=lf
+*.yml text eol=lf
+
+# SQL files — always LF
+*.sql text eol=lf
+
+# Binary files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.sqlite binary
+*.sqlite3 binary
+*.db binary
